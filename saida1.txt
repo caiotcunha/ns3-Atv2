@@ -1,0 +1,10 @@
+nó 0 connecta com nó 1
+nó 0 manda87para nó 1
+nó 0 conecta com 10.0.0.2
+nó 0 manda 78
+Conexão bem-sucedida
+nó 1 conecta com 10.0.0.1
+nó 1 manda 16
+Conexão bem-sucedida
+nó 0 conecta com 10.0.0.2
+nó 0 manda 94
