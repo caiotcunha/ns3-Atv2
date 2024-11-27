@@ -22,10 +22,9 @@
 
  
 using namespace ns3;
-#define RSS_VALUE (-70.0)
 #define NUM_NODES 5
  
-NS_LOG_COMPONENT_DEFINE("teste");
+NS_LOG_COMPONENT_DEFINE("atv2");
 
 class MyApp : public Application
 {
@@ -99,6 +98,9 @@ void
 MyApp::StartApplication (void)
 {
     is_running = true;
+    Time dropTime = Seconds(30.0);
+    Simulator::Schedule(dropTime, &MyApp::StopApplication, this); 
+
     Ptr<Socket> receiver_socket = Socket::CreateSocket (this->node, TcpSocketFactory::GetTypeId ());
     Ptr<Socket> sender_socket = Socket::CreateSocket (this->node, TcpSocketFactory::GetTypeId ());
 
@@ -142,11 +144,13 @@ MyApp::StopApplication(void)
     NS_LOG_UNCOND("Aplicação encerrada");
 }
 
-void MyApp::OnAccept(Ptr<Socket> s, const Address& from) {
+void MyApp::OnAccept(Ptr<Socket> s, const Address& from)
+{
     s->SetRecvCallback(MakeCallback(&MyApp::OnReceive, this));
 }
 
-void MyApp::OnReceive(Ptr<Socket> socket) {
+void MyApp::OnReceive(Ptr<Socket> socket)
+{
     Address from;
     Ptr<Packet> packet;
     int32_t networkOrderNumber;
@@ -265,26 +269,26 @@ main(int argc, char* argv[])
             //nó inicial
             Ptr<MyApp> app = CreateObject<MyApp> ();
             app->Setup (i,nodes.Get (i),nullptr, nullptr,interfaces.GetAddress(i+1),interfaces.GetAddress(i+1),true);
-            nodes.Get (i)->AddApplication (app);
             app->SetStartTime (Seconds (1.));
-            app->SetStopTime (Seconds (30.));
+            app->SetStopTime (Seconds (30));
+            nodes.Get (i)->AddApplication (app);
             continue;
         }
         if ( i == NUM_NODES - 1 ){
             //nó final
             Ptr<MyApp> app = CreateObject<MyApp> ();
             app->Setup (i,nodes.Get (i),nullptr, nullptr,interfaces.GetAddress(i-1),interfaces.GetAddress(i-1),true);
-            nodes.Get (i)->AddApplication (app);
             app->SetStartTime (Seconds (1.));
-            app->SetStopTime (Seconds (30.));
+            app->SetStopTime (Seconds (30));
+            nodes.Get (i)->AddApplication (app);
             continue;
         }
         //criando aplicação
         Ptr<MyApp> app = CreateObject<MyApp> ();
         app->Setup (i,nodes.Get (i),nullptr, nullptr,interfaces.GetAddress(i+1),interfaces.GetAddress(i-1),false);
-        nodes.Get (i)->AddApplication (app);
         app->SetStartTime (Seconds (1.));
-        app->SetStopTime (Seconds (30.));
+        app->SetStopTime (Seconds (30));
+        nodes.Get (i)->AddApplication (app);
 
     }
 
@@ -292,7 +296,7 @@ main(int argc, char* argv[])
     // Inicializar o NetAnim
     AnimationInterface anim("simulation.xml");
     
-    Time stop_time = Seconds(3);
+    Time stop_time = Seconds(30);
     Simulator::Stop(stop_time);
     Simulator::Run();
     Simulator::Destroy();
