@@ -8,6 +8,7 @@
 #include "ns3/mobility-model.h"
 #include "ns3/ssid.h"
 #include "ns3/string.h"
+#include "ns3/yans-wifi-phy.h"
 #include "ns3/yans-wifi-channel.h"
 #include "ns3/yans-wifi-helper.h"
 #include "ns3/applications-module.h"
@@ -22,7 +23,7 @@
  
 using namespace ns3;
 #define RSS_VALUE (-70.0)
-#define NUM_NODES 2
+#define NUM_NODES 5
  
 NS_LOG_COMPONENT_DEFINE("teste");
 
@@ -33,21 +34,25 @@ public:
     virtual ~MyApp ();
 
     static TypeId GetTypeId (void);
-    void Setup (int index,Ptr<Socket> sender_socket,Ptr<Socket> receiver_socket,Ipv4Address right_neighbor_address,Ipv4Address left_neighbor_address,bool is_edge);
+    void Setup (int index,Ptr<Node> node,Ptr<Socket> sender_socket,Ptr<Socket> receiver_socket,Ipv4Address right_neighbor_address,Ipv4Address left_neighbor_address,bool is_edge);
 
-    virtual void StartApplication (void);
+    void StartApplication() override;
+    void StopApplication() override;
+
     void OnAccept (Ptr<Socket> s, const Address& from);
     void OnReceive (Ptr<Socket> socket);
     void Connect (Ipv4Address neighbor_address);
     void ConnectionSucceeded(Ptr<Socket> socket);
     void ConnectionFailed(Ptr<Socket> socket);
+    bool OnConnectionRequested(Ptr<Socket> socket, const Address& from);
 
     void SendPacket (int32_t number);
 
     int index;
+    Ptr<Node> node;
     Ptr<Socket> sender_socket;
-    uint16_t receiver_port = 8080;
     Ptr<Socket> receiver_socket;
+    uint16_t receiver_port = 8080;
     bool is_running;
     bool is_edge;
     Ipv4Address right_neighbor_address;
@@ -79,9 +84,10 @@ TypeId MyApp::GetTypeId (void)
 }
 
 void
-MyApp::Setup (int index,Ptr<Socket> sender_socket,Ptr<Socket> receiver_socket,Ipv4Address right_neighbor_address,Ipv4Address left_neighbor_address,bool is_edge = false)
+MyApp::Setup (int index,Ptr<Node> node,Ptr<Socket> sender_socket,Ptr<Socket> receiver_socket,Ipv4Address right_neighbor_address,Ipv4Address left_neighbor_address,bool is_edge = false)
 {
     this->index = index;
+    this->node = node;
     this->sender_socket = sender_socket;
     this->receiver_socket = receiver_socket;
     this->right_neighbor_address = right_neighbor_address;
@@ -93,6 +99,9 @@ void
 MyApp::StartApplication (void)
 {
     is_running = true;
+    Ptr<Socket> receiver_socket = Socket::CreateSocket (this->node, TcpSocketFactory::GetTypeId ());
+    Ptr<Socket> sender_socket = Socket::CreateSocket (this->node, TcpSocketFactory::GetTypeId ());
+
     InetSocketAddress local = InetSocketAddress(Ipv4Address::GetAny(), receiver_port);
     if (receiver_socket->Bind(local) == -1)
     {
@@ -100,9 +109,37 @@ MyApp::StartApplication (void)
     }
     receiver_socket->Listen();
     receiver_socket->SetAcceptCallback(
-      MakeNullCallback<bool, Ptr<Socket>, const Address&> (),
+      MakeCallback(&MyApp::OnConnectionRequested, this),
       MakeCallback(&MyApp::OnAccept, this)
     );
+
+    this->receiver_socket = receiver_socket;
+    this->sender_socket = sender_socket;
+
+    if(this->index == 0){
+        int32_t number =  1 + rand() % 100;
+        Connect(this->left_neighbor_address);
+        SendPacket(number);
+    }
+
+}
+void
+MyApp::StopApplication(void)
+{
+    this->is_running = false;
+
+    if (this->receiver_socket)
+    {
+        this->receiver_socket->Close();
+        this->receiver_socket = nullptr;
+    }
+
+    if (this->sender_socket)
+    {
+        this->sender_socket->Close();
+        this->sender_socket = nullptr;
+    }
+    NS_LOG_UNCOND("Aplicação encerrada");
 }
 
 void MyApp::OnAccept(Ptr<Socket> s, const Address& from) {
@@ -114,15 +151,20 @@ void MyApp::OnReceive(Ptr<Socket> socket) {
     Ptr<Packet> packet;
     int32_t networkOrderNumber;
     int32_t receivedNumber = 0;
-    // Continuar escutando infinitamente
+
+    Ptr<Socket> sender_socket = Socket::CreateSocket (this->node, TcpSocketFactory::GetTypeId ());
+    this->sender_socket = sender_socket;
+
     while (packet = socket->RecvFrom(from)) {
+        if (packet->GetSize() == 0) {
+            break;
+        }
         InetSocketAddress inetFrom = InetSocketAddress::ConvertFrom(from);
         packet->CopyData((uint8_t *)&networkOrderNumber, sizeof(networkOrderNumber));
         receivedNumber = ntohl(networkOrderNumber);
+        NS_LOG_UNCOND("número recebido: " << receivedNumber);
 
-        // Lógica para processamento do pacote
         if (this->is_edge) {
-            // Gera um número aleatório quando for uma borda
             receivedNumber = 1 + rand() % 100;
             Connect(this->left_neighbor_address);
         }
@@ -135,9 +177,8 @@ void MyApp::OnReceive(Ptr<Socket> socket) {
             }
         }
         
-        // Enviar o pacote processado
         SendPacket(receivedNumber);
-    }
+    } 
 }
 
 void
@@ -145,52 +186,39 @@ MyApp::SendPacket (int32_t number)
 {
     int32_t networkOrderNumber = htonl(number);
     Ptr<Packet> packet = Create<Packet>((uint8_t *)&networkOrderNumber, sizeof(networkOrderNumber));
-    sender_socket->Send(packet);
-    NS_LOG_UNCOND("nó "<< this->index << " manda " << number);
+    this->sender_socket->Send(packet);
+    NS_LOG_INFO("nó "<< this->index << " manda " << number);
     sender_socket->Close();
 }
 
 void
 MyApp::Connect (Ipv4Address neighbor_address)
 {
-    sender_socket->SetConnectCallback (
+    this->sender_socket->SetConnectCallback (
         MakeCallback(&MyApp::ConnectionSucceeded, this),
         MakeCallback(&MyApp::ConnectionFailed, this)
     );
     InetSocketAddress remote = InetSocketAddress(neighbor_address, this->receiver_port);
-    sender_socket->Connect(remote);
-    NS_LOG_UNCOND("nó "<< this->index << " conecta com " << neighbor_address);
+    this->sender_socket->Connect(remote);
+    NS_LOG_INFO("nó "<< this->index << " conecta com " << neighbor_address);
 }
 
 // Callback para conexão bem-sucedida
 void MyApp::ConnectionSucceeded(Ptr<Socket> socket)
 {
-    NS_LOG_UNCOND("Conexão bem-sucedida");
+    NS_LOG_INFO("Conexão bem-sucedida");
 }
 
 // Callback para falha de conexão
 void MyApp::ConnectionFailed(Ptr<Socket> socket)
 {
-    NS_LOG_UNCOND("Falha na conexão");
+    NS_LOG_INFO("Falha na conexão");
 }
 
-void SendSinglePacket(Ptr<Socket> sender_socket)
-{
-    int32_t networkOrderNumber = htonl(1+rand()%100);
-    Ptr<Packet> packet = Create<Packet>((uint8_t *)&networkOrderNumber, sizeof(networkOrderNumber));
-    sender_socket->Send(packet);
-    NS_LOG_UNCOND("nó 0 manda" << 1+rand()%100 <<"para nó 1");
-    sender_socket->Close();
+bool MyApp::OnConnectionRequested(Ptr<Socket> socket, const Address& from) {
+    NS_LOG_INFO("Conexão solicitada de: " << from);
+    return true;
 }
-
-void ConnectAfterReceiverStart(Ptr<Socket> sender_socket, Ipv4Address receiver_address, uint16_t port)
-{
-    InetSocketAddress remote = InetSocketAddress(receiver_address, port);
-    sender_socket->Connect(remote);
-    NS_LOG_UNCOND("nó 0 connecta com nó 1");
-}
-
-
 
 int
 main(int argc, char* argv[])
@@ -199,24 +227,13 @@ main(int argc, char* argv[])
     NodeContainer nodes;
     nodes.Create(NUM_NODES);
 
-    std::string phyMode ("DsssRate1Mbps");
-
     /* Wifi Stuff*/
     WifiHelper wifi;
-    wifi.SetStandard (WIFI_STANDARD_80211b);
+    YansWifiChannelHelper wifiChannel = ns3::YansWifiChannelHelper::Default();
     YansWifiPhyHelper wifiPhy;
-    wifiPhy.Set ("RxGain", DoubleValue (0) );
-    wifiPhy.SetPcapDataLinkType (WifiPhyHelper::DLT_IEEE802_11_RADIO);
-
-    YansWifiChannelHelper wifiChannel;
-    wifiChannel.SetPropagationDelay ("ns3::ConstantSpeedPropagationDelayModel");
-    wifiChannel.AddPropagationLoss ("ns3::FixedRssLossModel","Rss",DoubleValue (RSS_VALUE));
     wifiPhy.SetChannel (wifiChannel.Create ());
 
     WifiMacHelper wifiMac;
-    wifi.SetRemoteStationManager ("ns3::ConstantRateWifiManager",
-                                "DataMode",StringValue (phyMode),
-                                "ControlMode",StringValue (phyMode));
     // Set it to adhoc mode
     wifiMac.SetType ("ns3::AdhocWifiMac");
 
@@ -227,9 +244,9 @@ main(int argc, char* argv[])
     Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator>();
     positionAlloc->Add(Vector(0.0, 0.0, 0.0));
     positionAlloc->Add(Vector(5.0, 0.0, 0.0));
-    // positionAlloc->Add(Vector(10.0, 0.0, 0.0));
-    // positionAlloc->Add(Vector(15.0, 0.0, 0.0));
-    // positionAlloc->Add(Vector(20.0, 0.0, 0.0));
+    positionAlloc->Add(Vector(10.0, 0.0, 0.0));
+    positionAlloc->Add(Vector(15.0, 0.0, 0.0));
+    positionAlloc->Add(Vector(20.0, 0.0, 0.0));
     
     mobility.SetPositionAllocator(positionAlloc);
     mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
@@ -242,19 +259,12 @@ main(int argc, char* argv[])
     ipv4.SetBase("10.0.0.0", "255.255.255.0");
     Ipv4InterfaceContainer interfaces = ipv4.Assign(devices);
 
-
-    // criação dos sockets e aplicações
     for( int i = 0; i < NUM_NODES; i++ ){
-        //criando socket de recebimento 1
-        Ptr<Socket> receiver_socket = Socket::CreateSocket (nodes.Get (i), TcpSocketFactory::GetTypeId ());
-
-        //criando socket de envio 1
-        Ptr<Socket> sender_socket = Socket::CreateSocket (nodes.Get (i), TcpSocketFactory::GetTypeId ());
 
         if ( i == 0 ){
             //nó inicial
             Ptr<MyApp> app = CreateObject<MyApp> ();
-            app->Setup (i,sender_socket, receiver_socket,interfaces.GetAddress(i+1),interfaces.GetAddress(i+1),true);
+            app->Setup (i,nodes.Get (i),nullptr, nullptr,interfaces.GetAddress(i+1),interfaces.GetAddress(i+1),true);
             nodes.Get (i)->AddApplication (app);
             app->SetStartTime (Seconds (1.));
             app->SetStopTime (Seconds (30.));
@@ -263,7 +273,7 @@ main(int argc, char* argv[])
         if ( i == NUM_NODES - 1 ){
             //nó final
             Ptr<MyApp> app = CreateObject<MyApp> ();
-            app->Setup (i,sender_socket, receiver_socket,interfaces.GetAddress(i-1),interfaces.GetAddress(i-1),true);
+            app->Setup (i,nodes.Get (i),nullptr, nullptr,interfaces.GetAddress(i-1),interfaces.GetAddress(i-1),true);
             nodes.Get (i)->AddApplication (app);
             app->SetStartTime (Seconds (1.));
             app->SetStopTime (Seconds (30.));
@@ -271,33 +281,18 @@ main(int argc, char* argv[])
         }
         //criando aplicação
         Ptr<MyApp> app = CreateObject<MyApp> ();
-        app->Setup (i,sender_socket, receiver_socket,interfaces.GetAddress(i+1),interfaces.GetAddress(i-1),false);
+        app->Setup (i,nodes.Get (i),nullptr, nullptr,interfaces.GetAddress(i+1),interfaces.GetAddress(i-1),false);
         nodes.Get (i)->AddApplication (app);
         app->SetStartTime (Seconds (1.));
         app->SetStopTime (Seconds (30.));
 
     }
 
-    // NS_LOG_UNCOND("nó 0 : " << interfaces.GetAddress(0));
-    // NS_LOG_UNCOND("nó 1 : " << interfaces.GetAddress(1));
-    // NS_LOG_UNCOND("nó 2 : " << interfaces.GetAddress(2));
-    // NS_LOG_UNCOND("nó 3 : " << interfaces.GetAddress(3));
-    // NS_LOG_UNCOND("nó 4 : " << interfaces.GetAddress(4));
-    
-    // Configurando o nó de envio (nó 0)
-    Ptr<Socket> sender_socket = Socket::CreateSocket(nodes.Get(1), TcpSocketFactory::GetTypeId());
-    // Agendar a conexão e o envio após o receptor iniciar
-    // Primeiro envio para começar a cadeia
-    Simulator::Schedule(Seconds(1.0), &ConnectAfterReceiverStart, sender_socket, interfaces.GetAddress(0), 8080);
-    Simulator::Schedule(Seconds(1.1), &SendSinglePacket, sender_socket);
-
-    //LogComponentEnable("Socket", LOG_LEVEL_ALL);
-
     Ipv4GlobalRoutingHelper::PopulateRoutingTables();
     // Inicializar o NetAnim
-    AnimationInterface anim("simulation.xml"); // Arquivo de saída da animação
+    AnimationInterface anim("simulation.xml");
     
-    Time stop_time = Time("50s");
+    Time stop_time = Seconds(3);
     Simulator::Stop(stop_time);
     Simulator::Run();
     Simulator::Destroy();
